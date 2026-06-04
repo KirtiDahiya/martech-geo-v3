@@ -8,13 +8,13 @@ from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 
-app = FastAPI(title="GEO Web - No Login", version="2.6.0-output-only-ui")
+app = FastAPI(title="GEO Web - No Login", version="2.7.0-output-only-download")
 
 
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "martech-497412")
 REGION = os.environ.get("REGION", "asia-south2")
 GEO_BUCKET = os.environ.get("GEO_BUCKET", "geo-accelator")
-PROCESSOR_JOB_NAME = os.environ.get("PROCESSOR_JOB_NAME", "martech-geo-llm")
+PROCESSOR_JOB_NAME = os.environ.get("PROCESSOR_JOB_NAME", "martech-geo-v3-job")
 
 SUPPORTED_APIS = ["openai", "anthropic", "perplexity", "google"]
 
@@ -178,6 +178,16 @@ def upload_text_to_gcs(
     return f"gs://{bucket_name}/{object_name}"
 
 
+def gcs_file_exists(bucket_name: str, object_name: str) -> bool:
+    from google.cloud import storage
+
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(object_name)
+
+    return blob.exists()
+
+
 def download_gcs_file_as_bytes(bucket_name: str, object_name: str) -> bytes:
     from google.cloud import storage
 
@@ -188,7 +198,7 @@ def download_gcs_file_as_bytes(bucket_name: str, object_name: str) -> bytes:
     if not blob.exists():
         raise HTTPException(
             status_code=404,
-            detail="File is not ready yet. Please try again after the job completes.",
+            detail="output.json is not ready yet. Please wait for the Cloud Run Job to complete and then try again.",
         )
 
     return blob.download_as_bytes()
@@ -371,7 +381,7 @@ UAE</textarea>
 def health():
     return {
         "status": "ok",
-        "service": "geo-web-complete",
+        "service": "geo-web-output-only-download",
         "project": GCP_PROJECT_ID,
         "region": REGION,
         "geo_bucket": GEO_BUCKET,
@@ -462,7 +472,12 @@ def create_brand_context(
     <p><b>Working/log folder:</b><br><code>gs://{GEO_BUCKET}/{working_prefix}/</code></p>
     <p><b>Cloud Run Job operation:</b><br><code>{operation_name}</code></p>
 
-    <a class="button" href="/download/{generated_user_id}/{run_id}/output.json">Download output.json</a>
+    <div class="hint">
+      The job has started. output.json may take some time to be created.
+      Use the button below to check status and download only output.json.
+    </div>
+
+    <a class="button" href="/result/{generated_user_id}/{run_id}">Check output.json</a>
 
     <br><br>
     <a href="/">Create another run</a>
@@ -471,6 +486,17 @@ def create_brand_context(
 </html>
 """
     )
+
+
+@app.get("/result/{user_id}/{run_id}", response_class=HTMLResponse)
+def result_page(user_id: str, run_id: str):
+    safe_user_id = safe_id(user_id)
+    safe_run_id = safe_id(run_id, "run_001")
+
+    object_name = f"{safe_user_id}/{safe_run_id}/Output/output.json"
+    output_ready = gcs_file_exists(GEO_BUCKET, object_name)
+
+    return HTMLResponse(result_html(safe_user_id, safe_run_id, output_ready))
 
 
 @app.get("/download/{user_id}/{run_id}/output.json")
@@ -484,4 +510,3 @@ def download_output(user_id: str, run_id: str):
             "Content-Disposition": f'attachment; filename="{run_id}_output.json"'
         },
     )
-
