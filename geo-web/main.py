@@ -1,14 +1,16 @@
+
 import os
 import re
 import uuid
 from datetime import datetime, timezone
 from io import BytesIO
+from typing import List, Optional
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 
-app = FastAPI(title="GEO Web - No Login", version="2.7.0-output-only-download")
+app = FastAPI(title="GEO Web - No Login", version="2.8.0-output-only-safe")
 
 
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "martech-497412")
@@ -22,19 +24,10 @@ SUPPORTED_APIS = ["openai", "anthropic", "perplexity", "google"]
 def make_run_id() -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     suffix = uuid.uuid4().hex[:8]
-    return f"run_{timestamp}_{suffix}"
+    return "run_{}_{}".format(timestamp, suffix)
 
 
 def make_user_id_from_brand_name(brand_name: str) -> str:
-    """
-    Creates user_id automatically from Brand Name.
-
-    Rules:
-    - lower case
-    - remove spaces
-    - remove special characters
-    - add timestamp and short UUID suffix for uniqueness
-    """
     base = (brand_name or "").strip().lower()
     base = re.sub(r"\s+", "", base)
     base = re.sub(r"[^a-z0-9]", "", base)
@@ -43,18 +36,17 @@ def make_user_id_from_brand_name(brand_name: str) -> str:
         base = "brand"
 
     base = base[:60]
-
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     suffix = uuid.uuid4().hex[:6]
 
-    return f"{base}_{timestamp}_{suffix}"
+    return "{}_{}_{}".format(base, timestamp, suffix)
 
 
 def safe_id(value: str, default: str = "brand") -> str:
     return re.sub(r"[^a-zA-Z0-9_-]", "_", (value or default).strip())
 
 
-def clean_lines(value: str) -> list[str]:
+def clean_lines(value: str) -> List[str]:
     if not value:
         return []
 
@@ -75,7 +67,7 @@ def clean_lines(value: str) -> list[str]:
 
 def bullet_list(value: str) -> str:
     items = clean_lines(value)
-    return "\n".join([f"- {item}" for item in items]) if items else "- Not provided"
+    return "\n".join(["- {}".format(item) for item in items]) if items else "- Not provided"
 
 
 def validate_required_text(
@@ -89,23 +81,19 @@ def validate_required_text(
     if len(value) < min_len:
         raise HTTPException(
             status_code=400,
-            detail=f"{field_name} is required and must be at least {min_len} characters.",
+            detail="{} is required and must be at least {} characters.".format(field_name, min_len),
         )
 
     if len(value) > max_len:
         raise HTTPException(
             status_code=400,
-            detail=f"{field_name} must not exceed {max_len} characters.",
+            detail="{} must not exceed {} characters.".format(field_name, max_len),
         )
 
     return value
 
 
-def normalize_selected_apis(selected_apis: list[str] | None) -> str:
-    """
-    If no checkbox is selected, returns blank string.
-    Blank means run all available configured APIs.
-    """
+def normalize_selected_apis(selected_apis: Optional[List[str]]) -> str:
     if not selected_apis:
         return ""
 
@@ -119,47 +107,67 @@ def normalize_selected_apis(selected_apis: list[str] | None) -> str:
 
 
 def build_brand_context_md(data: dict) -> str:
-    return f"""# Brand Context
+    return """# Brand Context
 
 ## Brand Name
-{data['brand_name']}
+{brand_name}
 
 ## Website URL
-{data['website_url']}
+{website_url}
 
 ## Industry
-{data['industry']}
+{industry}
 
 ## Description
-{data['description']}
+{description}
 
 ## Tone
-{data['tone']}
+{tone}
 
 ## Positioning Statement
-{data['positioning_statement']}
+{positioning_statement}
 
 ## Products
-{bullet_list(data['products'])}
+{products}
 
 ## Target Markets
-{bullet_list(data['target_markets'])}
+{target_markets}
 
 ## Known Personas
-{bullet_list(data['known_personas'])}
+{known_personas}
 
 ## Competitor List
-{bullet_list(data['competitor_list'])}
+{competitor_list}
 
 ## C360 Column Guide
-{data['c360_column_guide']}
+{c360_column_guide}
 
 ## Aliases
-{bullet_list(data['aliases'])}
+{aliases}
 
 ## Regions
-{bullet_list(data['regions'])}
-"""
+{regions}
+""".format(
+        brand_name=data["brand_name"],
+        website_url=data["website_url"],
+        industry=data["industry"],
+        description=data["description"],
+        tone=data["tone"],
+        positioning_statement=data["positioning_statement"],
+        products=bullet_list(data["products"]),
+        target_markets=bullet_list(data["target_markets"]),
+        known_personas=bullet_list(data["known_personas"]),
+        competitor_list=bullet_list(data["competitor_list"]),
+        c360_column_guide=data["c360_column_guide"],
+        aliases=bullet_list(data["aliases"]),
+        regions=bullet_list(data["regions"]),
+    )
+
+
+def get_storage_client():
+    from google.cloud import storage
+
+    return storage.Client()
 
 
 def upload_text_to_gcs(
@@ -168,30 +176,23 @@ def upload_text_to_gcs(
     content: str,
     content_type: str = "text/markdown",
 ) -> str:
-    from google.cloud import storage
-
-    client = storage.Client()
+    client = get_storage_client()
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(object_name)
     blob.upload_from_string(content, content_type=content_type)
 
-    return f"gs://{bucket_name}/{object_name}"
+    return "gs://{}/{}".format(bucket_name, object_name)
 
 
 def gcs_file_exists(bucket_name: str, object_name: str) -> bool:
-    from google.cloud import storage
-
-    client = storage.Client()
+    client = get_storage_client()
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(object_name)
-
     return blob.exists()
 
 
 def download_gcs_file_as_bytes(bucket_name: str, object_name: str) -> bytes:
-    from google.cloud import storage
-
-    client = storage.Client()
+    client = get_storage_client()
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(object_name)
 
@@ -211,15 +212,16 @@ def trigger_processor_job(
 ) -> str:
     from google.cloud.run_v2 import JobsClient, RunJobRequest
 
-    input_prefix = f"{user_id}/{run_id}/Input"
-    output_prefix = f"{user_id}/{run_id}/Output"
-    working_prefix = f"{user_id}/{run_id}/Working"
-    artefacts_prefix = f"{user_id}/{run_id}/Artefacts"
+    input_prefix = "{}/{}/Input".format(user_id, run_id)
+    output_prefix = "{}/{}/Output".format(user_id, run_id)
+    working_prefix = "{}/{}/Working".format(user_id, run_id)
+    artefacts_prefix = "{}/{}/Artefacts".format(user_id, run_id)
 
     client = JobsClient()
-
-    job_name = (
-        f"projects/{GCP_PROJECT_ID}/locations/{REGION}/jobs/{PROCESSOR_JOB_NAME}"
+    job_name = "projects/{}/locations/{}/jobs/{}".format(
+        GCP_PROJECT_ID,
+        REGION,
+        PROCESSOR_JOB_NAME,
     )
 
     request = RunJobRequest(
@@ -257,28 +259,31 @@ label { font-weight:bold; display:block; margin-top:16px; }
 input, textarea { width:100%; padding:10px; margin-top:6px; border:1px solid #ccc; border-radius:8px; font-size:14px; box-sizing:border-box; }
 textarea { min-height:90px; }
 button, .button { margin-top:24px; padding:12px 18px; border:0; border-radius:8px; background:#111827; color:white; text-decoration:none; display:inline-block; }
+.button.secondary { background:#374151; }
 code { background:#f3f4f6; padding:2px 4px; border-radius:4px; }
 .hint { color:#666; font-size:12px; }
 .checkbox-row { display:flex; gap:18px; flex-wrap:wrap; margin-top:8px; }
 .checkbox-item { display:flex; align-items:center; gap:6px; border:1px solid #ddd; padding:8px 10px; border-radius:8px; }
 .checkbox-item input { width:auto; margin:0; }
+.success { background:#ecfdf5; border:1px solid #a7f3d0; padding:12px; border-radius:8px; }
+.waiting { background:#fffbeb; border:1px solid #fde68a; padding:12px; border-radius:8px; }
 </style>
 """
 
 
 def form_html() -> str:
-    return f"""
+    return """
 <!DOCTYPE html>
 <html>
 <head>
   <title>GEO Brand Context Intake</title>
-  {page_css()}
+  {css}
 </head>
 <body>
   <h1>GEO Brand Context Intake</h1>
   <p class="subtitle">
     Data will be stored under:
-    <code>gs://{GEO_BUCKET}/&lt;generated_user_id&gt;/&lt;run_id&gt;/</code>
+    <code>gs://{bucket}/&lt;generated_user_id&gt;/&lt;run_id&gt;/</code>
   </p>
   <p class="hint">
     generated_user_id is created automatically from Brand Name. Spaces are removed and a unique suffix is added.
@@ -374,18 +379,115 @@ UAE</textarea>
   </div>
 </body>
 </html>
-"""
+""".format(css=page_css(), bucket=GEO_BUCKET)
+
+
+def started_html(
+    brand_name: str,
+    generated_user_id: str,
+    run_id: str,
+    selected_label: str,
+    input_gcs_uri: str,
+    output_prefix: str,
+    working_prefix: str,
+    operation_name: str,
+) -> str:
+    return """
+<!DOCTYPE html>
+<html>
+<head>{css}</head>
+<body>
+  <h1>GEO Processing Started</h1>
+  <div class="card">
+    <p><b>Brand Name:</b> <code>{brand_name}</code></p>
+    <p><b>Generated User ID:</b> <code>{generated_user_id}</code></p>
+    <p><b>Run ID:</b> <code>{run_id}</code></p>
+    <p><b>Selected APIs:</b> <code>{selected_label}</code></p>
+
+    <p><b>Input:</b><br><code>{input_gcs_uri}</code></p>
+    <p><b>Output folder:</b><br><code>gs://{bucket}/{output_prefix}/</code></p>
+    <p><b>Working/log folder:</b><br><code>gs://{bucket}/{working_prefix}/</code></p>
+    <p><b>Cloud Run Job operation:</b><br><code>{operation_name}</code></p>
+
+    <div class="waiting">
+      The job has started. output.json may take some time to be created.
+      Use the button below to check and download only output.json.
+    </div>
+
+    <a class="button" href="/result/{generated_user_id}/{run_id}">Check output.json</a>
+
+    <br><br>
+    <a href="/">Create another run</a>
+  </div>
+</body>
+</html>
+""".format(
+        css=page_css(),
+        brand_name=brand_name,
+        generated_user_id=generated_user_id,
+        run_id=run_id,
+        selected_label=selected_label,
+        input_gcs_uri=input_gcs_uri,
+        bucket=GEO_BUCKET,
+        output_prefix=output_prefix,
+        working_prefix=working_prefix,
+        operation_name=operation_name,
+    )
+
+
+def result_html(user_id: str, run_id: str, output_ready: bool) -> str:
+    output_path = "gs://{}/{}/{}/Output/output.json".format(GEO_BUCKET, user_id, run_id)
+
+    if output_ready:
+        status_block = """
+        <div class="success">output.json is ready.</div>
+        <a class="button" href="/download/{}/{}/output.json">Download output.json</a>
+        """.format(user_id, run_id)
+    else:
+        status_block = """
+        <div class="waiting">
+          output.json is not ready yet. Please wait for the Cloud Run Job to complete and refresh this page.
+        </div>
+        <a class="button secondary" href="/result/{}/{}">Refresh status</a>
+        """.format(user_id, run_id)
+
+    return """
+<!DOCTYPE html>
+<html>
+<head>{css}</head>
+<body>
+  <h1>GEO Output Status</h1>
+  <div class="card">
+    <p><b>Generated User ID:</b> <code>{user_id}</code></p>
+    <p><b>Run ID:</b> <code>{run_id}</code></p>
+    <p><b>Expected output:</b><br><code>{output_path}</code></p>
+
+    {status_block}
+
+    <br><br>
+    <a href="/">Create another run</a>
+  </div>
+</body>
+</html>
+""".format(
+        css=page_css(),
+        user_id=user_id,
+        run_id=run_id,
+        output_path=output_path,
+        status_block=status_block,
+    )
 
 
 @app.get("/health")
 def health():
     return {
         "status": "ok",
-        "service": "geo-web-output-only-download",
+        "service": "geo-web-output-only-safe",
         "project": GCP_PROJECT_ID,
         "region": REGION,
         "geo_bucket": GEO_BUCKET,
         "processor_job": PROCESSOR_JOB_NAME,
+        "ui_downloads": ["Output/output.json"],
     }
 
 
@@ -409,7 +511,7 @@ def create_brand_context(
     c360_column_guide: str = Form(...),
     aliases: str = Form(...),
     regions: str = Form(...),
-    selected_apis: list[str] = Form(default=[]),
+    selected_apis: Optional[List[str]] = Form(None),
 ):
     brand_name = validate_required_text("Brand Name", brand_name)
 
@@ -435,11 +537,11 @@ def create_brand_context(
         "regions": validate_required_text("Regions", regions),
     }
 
-    input_prefix = f"{generated_user_id}/{run_id}/Input"
-    output_prefix = f"{generated_user_id}/{run_id}/Output"
-    working_prefix = f"{generated_user_id}/{run_id}/Working"
+    input_prefix = "{}/{}/Input".format(generated_user_id, run_id)
+    output_prefix = "{}/{}/Output".format(generated_user_id, run_id)
+    working_prefix = "{}/{}/Working".format(generated_user_id, run_id)
 
-    input_file = f"{input_prefix}/brand_context.md"
+    input_file = "{}/brand_context.md".format(input_prefix)
 
     input_gcs_uri = upload_text_to_gcs(
         bucket_name=GEO_BUCKET,
@@ -455,36 +557,16 @@ def create_brand_context(
     )
 
     return HTMLResponse(
-        f"""
-<!DOCTYPE html>
-<html>
-<head>{page_css()}</head>
-<body>
-  <h1>GEO Processing Started</h1>
-  <div class="card">
-    <p><b>Brand Name:</b> <code>{brand_name}</code></p>
-    <p><b>Generated User ID:</b> <code>{generated_user_id}</code></p>
-    <p><b>Run ID:</b> <code>{run_id}</code></p>
-    <p><b>Selected APIs:</b> <code>{selected_label}</code></p>
-
-    <p><b>Input:</b><br><code>{input_gcs_uri}</code></p>
-    <p><b>Output folder:</b><br><code>gs://{GEO_BUCKET}/{output_prefix}/</code></p>
-    <p><b>Working/log folder:</b><br><code>gs://{GEO_BUCKET}/{working_prefix}/</code></p>
-    <p><b>Cloud Run Job operation:</b><br><code>{operation_name}</code></p>
-
-    <div class="hint">
-      The job has started. output.json may take some time to be created.
-      Use the button below to check status and download only output.json.
-    </div>
-
-    <a class="button" href="/result/{generated_user_id}/{run_id}">Check output.json</a>
-
-    <br><br>
-    <a href="/">Create another run</a>
-  </div>
-</body>
-</html>
-"""
+        started_html(
+            brand_name=brand_name,
+            generated_user_id=generated_user_id,
+            run_id=run_id,
+            selected_label=selected_label,
+            input_gcs_uri=input_gcs_uri,
+            output_prefix=output_prefix,
+            working_prefix=working_prefix,
+            operation_name=operation_name,
+        )
     )
 
 
@@ -493,7 +575,7 @@ def result_page(user_id: str, run_id: str):
     safe_user_id = safe_id(user_id)
     safe_run_id = safe_id(run_id, "run_001")
 
-    object_name = f"{safe_user_id}/{safe_run_id}/Output/output.json"
+    object_name = "{}/{}/Output/output.json".format(safe_user_id, safe_run_id)
     output_ready = gcs_file_exists(GEO_BUCKET, object_name)
 
     return HTMLResponse(result_html(safe_user_id, safe_run_id, output_ready))
@@ -501,12 +583,15 @@ def result_page(user_id: str, run_id: str):
 
 @app.get("/download/{user_id}/{run_id}/output.json")
 def download_output(user_id: str, run_id: str):
-    object_name = f"{safe_id(user_id)}/{safe_id(run_id, 'run_001')}/Output/output.json"
+    safe_user_id = safe_id(user_id)
+    safe_run_id = safe_id(run_id, "run_001")
+
+    object_name = "{}/{}/Output/output.json".format(safe_user_id, safe_run_id)
 
     return StreamingResponse(
         BytesIO(download_gcs_file_as_bytes(GEO_BUCKET, object_name)),
         media_type="application/json",
         headers={
-            "Content-Disposition": f'attachment; filename="{run_id}_output.json"'
+            "Content-Disposition": 'attachment; filename="{}_output.json"'.format(safe_run_id)
         },
     )
