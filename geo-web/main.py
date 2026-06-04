@@ -1,6 +1,7 @@
 
 import os
 import re
+import time
 import uuid
 from datetime import datetime, timezone
 from io import BytesIO
@@ -10,13 +11,18 @@ from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 
-app = FastAPI(title="GEO Web - No Login", version="2.9.0-adidas-defaults")
+app = FastAPI(title="GEO Web - No Login", version="3.0.0-run-before-download")
 
 
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "martech-497412")
 REGION = os.environ.get("REGION", "asia-south2")
 GEO_BUCKET = os.environ.get("GEO_BUCKET", "geo-accelator")
 PROCESSOR_JOB_NAME = os.environ.get("PROCESSOR_JOB_NAME", "martech-geo-v3-job")
+
+# The UI will wait for output.json before showing the download button.
+# Set Cloud Run service timeout higher than this value.
+JOB_WAIT_TIMEOUT_SECONDS = int(os.environ.get("JOB_WAIT_TIMEOUT_SECONDS", "840"))
+JOB_POLL_SECONDS = int(os.environ.get("JOB_POLL_SECONDS", "5"))
 
 SUPPORTED_APIS = ["openai", "anthropic", "perplexity", "google"]
 
@@ -191,6 +197,17 @@ def gcs_file_exists(bucket_name: str, object_name: str) -> bool:
     return blob.exists()
 
 
+def wait_for_gcs_file(bucket_name: str, object_name: str, timeout_seconds: int, poll_seconds: int) -> bool:
+    start = time.time()
+
+    while time.time() - start < timeout_seconds:
+        if gcs_file_exists(bucket_name, object_name):
+            return True
+        time.sleep(poll_seconds)
+
+    return False
+
+
 def download_gcs_file_as_bytes(bucket_name: str, object_name: str) -> bytes:
     client = get_storage_client()
     bucket = client.bucket(bucket_name)
@@ -259,14 +276,13 @@ label { font-weight:bold; display:block; margin-top:16px; }
 input, textarea { width:100%; padding:10px; margin-top:6px; border:1px solid #ccc; border-radius:8px; font-size:14px; box-sizing:border-box; }
 textarea { min-height:90px; }
 button, .button { margin-top:24px; padding:12px 18px; border:0; border-radius:8px; background:#111827; color:white; text-decoration:none; display:inline-block; }
-.button.secondary { background:#374151; }
 code { background:#f3f4f6; padding:2px 4px; border-radius:4px; }
 .hint { color:#666; font-size:12px; }
 .checkbox-row { display:flex; gap:18px; flex-wrap:wrap; margin-top:8px; }
 .checkbox-item { display:flex; align-items:center; gap:6px; border:1px solid #ddd; padding:8px 10px; border-radius:8px; }
 .checkbox-item input { width:auto; margin:0; }
 .success { background:#ecfdf5; border:1px solid #a7f3d0; padding:12px; border-radius:8px; }
-.waiting { background:#fffbeb; border:1px solid #fde68a; padding:12px; border-radius:8px; }
+.error { background:#fef2f2; border:1px solid #fecaca; padding:12px; border-radius:8px; }
 </style>
 """
 
@@ -284,9 +300,6 @@ def form_html() -> str:
   <p class="subtitle">
     Data will be stored under:
     <code>gs://{bucket}/&lt;generated_user_id&gt;/&lt;run_id&gt;/</code>
-  </p>
-  <p class="hint">
-    generated_user_id is created automatically from Brand Name. Spaces are removed and a unique suffix is added.
   </p>
 
   <div class="card">
@@ -398,7 +411,7 @@ Middle East
 UAE
 Latin America</textarea>
 
-      <button type="submit">Create brand_context.md and Run Pipeline</button>
+      <button type="submit">Run Pipeline</button>
     </form>
   </div>
 </body>
@@ -406,39 +419,29 @@ Latin America</textarea>
 """.format(css=page_css(), bucket=GEO_BUCKET)
 
 
-def started_html(
+def download_ready_html(
     brand_name: str,
     generated_user_id: str,
     run_id: str,
     selected_label: str,
-    input_gcs_uri: str,
     output_prefix: str,
-    working_prefix: str,
-    operation_name: str,
 ) -> str:
     return """
 <!DOCTYPE html>
 <html>
 <head>{css}</head>
 <body>
-  <h1>GEO Processing Started</h1>
+  <h1>GEO Output Ready</h1>
   <div class="card">
+    <div class="success">Pipeline completed and output.json is ready.</div>
+
     <p><b>Brand Name:</b> <code>{brand_name}</code></p>
     <p><b>Generated User ID:</b> <code>{generated_user_id}</code></p>
     <p><b>Run ID:</b> <code>{run_id}</code></p>
     <p><b>Selected APIs:</b> <code>{selected_label}</code></p>
-
-    <p><b>Input:</b><br><code>{input_gcs_uri}</code></p>
     <p><b>Output folder:</b><br><code>gs://{bucket}/{output_prefix}/</code></p>
-    <p><b>Working/log folder:</b><br><code>gs://{bucket}/{working_prefix}/</code></p>
-    <p><b>Cloud Run Job operation:</b><br><code>{operation_name}</code></p>
 
-    <div class="waiting">
-      The job has started. output.json may take some time to be created.
-      Use the button below to check and download only output.json.
-    </div>
-
-    <a class="button" href="/result/{generated_user_id}/{run_id}">Check output.json</a>
+    <a class="button" href="/download/{generated_user_id}/{run_id}/output.json">Download output.json</a>
 
     <br><br>
     <a href="/">Create another run</a>
@@ -451,54 +454,46 @@ def started_html(
         generated_user_id=generated_user_id,
         run_id=run_id,
         selected_label=selected_label,
-        input_gcs_uri=input_gcs_uri,
         bucket=GEO_BUCKET,
         output_prefix=output_prefix,
-        working_prefix=working_prefix,
-        operation_name=operation_name,
     )
 
 
-def result_html(user_id: str, run_id: str, output_ready: bool) -> str:
-    output_path = "gs://{}/{}/{}/Output/output.json".format(GEO_BUCKET, user_id, run_id)
-
-    if output_ready:
-        status_block = """
-        <div class="success">output.json is ready.</div>
-        <a class="button" href="/download/{}/{}/output.json">Download output.json</a>
-        """.format(user_id, run_id)
-    else:
-        status_block = """
-        <div class="waiting">
-          output.json is not ready yet. Please wait for the Cloud Run Job to complete and refresh this page.
-        </div>
-        <a class="button secondary" href="/result/{}/{}">Refresh status</a>
-        """.format(user_id, run_id)
-
+def output_not_ready_html(
+    generated_user_id: str,
+    run_id: str,
+    output_prefix: str,
+    operation_name: str,
+) -> str:
     return """
 <!DOCTYPE html>
 <html>
 <head>{css}</head>
 <body>
-  <h1>GEO Output Status</h1>
+  <h1>Output Not Ready</h1>
   <div class="card">
-    <p><b>Generated User ID:</b> <code>{user_id}</code></p>
+    <div class="error">
+      The pipeline did not create output.json within the configured wait time.
+      No download option is shown because output.json is not ready.
+    </div>
+
+    <p><b>Generated User ID:</b> <code>{generated_user_id}</code></p>
     <p><b>Run ID:</b> <code>{run_id}</code></p>
-    <p><b>Expected output:</b><br><code>{output_path}</code></p>
+    <p><b>Expected output folder:</b><br><code>gs://{bucket}/{output_prefix}/</code></p>
+    <p><b>Cloud Run Job operation:</b><br><code>{operation_name}</code></p>
 
-    {status_block}
-
-    <br><br>
+    <br>
     <a href="/">Create another run</a>
   </div>
 </body>
 </html>
 """.format(
         css=page_css(),
-        user_id=user_id,
+        generated_user_id=generated_user_id,
         run_id=run_id,
-        output_path=output_path,
-        status_block=status_block,
+        bucket=GEO_BUCKET,
+        output_prefix=output_prefix,
+        operation_name=operation_name,
     )
 
 
@@ -506,11 +501,12 @@ def result_html(user_id: str, run_id: str, output_ready: bool) -> str:
 def health():
     return {
         "status": "ok",
-        "service": "geo-web-adidas-defaults",
+        "service": "geo-web-run-before-download",
         "project": GCP_PROJECT_ID,
         "region": REGION,
         "geo_bucket": GEO_BUCKET,
         "processor_job": PROCESSOR_JOB_NAME,
+        "job_wait_timeout_seconds": JOB_WAIT_TIMEOUT_SECONDS,
         "ui_downloads": ["Output/output.json"],
     }
 
@@ -563,11 +559,11 @@ def create_brand_context(
 
     input_prefix = "{}/{}/Input".format(generated_user_id, run_id)
     output_prefix = "{}/{}/Output".format(generated_user_id, run_id)
-    working_prefix = "{}/{}/Working".format(generated_user_id, run_id)
 
     input_file = "{}/brand_context.md".format(input_prefix)
+    output_file = "{}/output.json".format(output_prefix)
 
-    input_gcs_uri = upload_text_to_gcs(
+    upload_text_to_gcs(
         bucket_name=GEO_BUCKET,
         object_name=input_file,
         content=build_brand_context_md(data),
@@ -580,29 +576,33 @@ def create_brand_context(
         selected_apis_csv=selected_apis_csv,
     )
 
-    return HTMLResponse(
-        started_html(
-            brand_name=brand_name,
-            generated_user_id=generated_user_id,
-            run_id=run_id,
-            selected_label=selected_label,
-            input_gcs_uri=input_gcs_uri,
-            output_prefix=output_prefix,
-            working_prefix=working_prefix,
-            operation_name=operation_name,
-        )
+    output_ready = wait_for_gcs_file(
+        bucket_name=GEO_BUCKET,
+        object_name=output_file,
+        timeout_seconds=JOB_WAIT_TIMEOUT_SECONDS,
+        poll_seconds=JOB_POLL_SECONDS,
     )
 
+    if output_ready:
+        return HTMLResponse(
+            download_ready_html(
+                brand_name=brand_name,
+                generated_user_id=generated_user_id,
+                run_id=run_id,
+                selected_label=selected_label,
+                output_prefix=output_prefix,
+            )
+        )
 
-@app.get("/result/{user_id}/{run_id}", response_class=HTMLResponse)
-def result_page(user_id: str, run_id: str):
-    safe_user_id = safe_id(user_id)
-    safe_run_id = safe_id(run_id, "run_001")
-
-    object_name = "{}/{}/Output/output.json".format(safe_user_id, safe_run_id)
-    output_ready = gcs_file_exists(GEO_BUCKET, object_name)
-
-    return HTMLResponse(result_html(safe_user_id, safe_run_id, output_ready))
+    return HTMLResponse(
+        output_not_ready_html(
+            generated_user_id=generated_user_id,
+            run_id=run_id,
+            output_prefix=output_prefix,
+            operation_name=operation_name,
+        ),
+        status_code=202,
+    )
 
 
 @app.get("/download/{user_id}/{run_id}/output.json")
