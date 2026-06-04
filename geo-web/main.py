@@ -8,7 +8,7 @@ from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 
-app = FastAPI(title="GEO Web - No Login", version="2.5.0-complete")
+app = FastAPI(title="GEO Web - No Login", version="2.6.0-output-only-ui")
 
 
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "martech-497412")
@@ -463,8 +463,6 @@ def create_brand_context(
     <p><b>Cloud Run Job operation:</b><br><code>{operation_name}</code></p>
 
     <a class="button" href="/download/{generated_user_id}/{run_id}/output.json">Download output.json</a>
-    <a class="button" href="/download/{generated_user_id}/{run_id}/run_log.json">Download run_log.json</a>
-    <a class="button" href="/download/{generated_user_id}/{run_id}/llm_runtime_config.json">Download llm_runtime_config.json</a>
 
     <br><br>
     <a href="/">Create another run</a>
@@ -487,28 +485,3 @@ def download_output(user_id: str, run_id: str):
         },
     )
 
-
-@app.get("/download/{user_id}/{run_id}/run_log.json")
-def download_run_log(user_id: str, run_id: str):
-    object_name = f"{safe_id(user_id)}/{safe_id(run_id, 'run_001')}/Working/run_log.json"
-
-    return StreamingResponse(
-        BytesIO(download_gcs_file_as_bytes(GEO_BUCKET, object_name)),
-        media_type="application/json",
-        headers={
-            "Content-Disposition": f'attachment; filename="{run_id}_run_log.json"'
-        },
-    )
-
-
-@app.get("/download/{user_id}/{run_id}/llm_runtime_config.json")
-def download_llm_runtime_config(user_id: str, run_id: str):
-    object_name = f"{safe_id(user_id)}/{safe_id(run_id, 'run_001')}/Working/llm_runtime_config.json"
-
-    return StreamingResponse(
-        BytesIO(download_gcs_file_as_bytes(GEO_BUCKET, object_name)),
-        media_type="application/json",
-        headers={
-            "Content-Disposition": f'attachment; filename="{run_id}_llm_runtime_config.json"'
-        },
-    )
