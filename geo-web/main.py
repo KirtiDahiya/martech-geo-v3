@@ -10,7 +10,7 @@ from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 
-app = FastAPI(title="GEO Web - No Login", version="2.8.0-output-only-safe")
+app = FastAPI(title="GEO Web - No Login", version="2.9.0-adidas-defaults")
 
 
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "martech-497412")
@@ -292,7 +292,7 @@ def form_html() -> str:
   <div class="card">
     <form method="post" action="/brand-context">
       <label>Brand Name *</label>
-      <input name="brand_name" required value="ABC Mobility Components">
+      <input name="brand_name" required value="Adidas">
 
       <label>LLM APIs to run</label>
       <div class="hint">Select one or more. If nothing is selected, all configured APIs will run.</div>
@@ -304,64 +304,85 @@ def form_html() -> str:
       </div>
 
       <label>Website URL *</label>
-      <input name="website_url" required value="https://www.abcmobilitycomponents.com">
+      <input name="website_url" required value="https://www.adidas.com">
 
       <label>Industry *</label>
-      <input name="industry" required value="Automotive Components Manufacturing">
+      <input name="industry" required value="Sportswear, Footwear, Apparel and Lifestyle Retail">
 
       <label>Description *</label>
-      <textarea name="description" required>ABC Mobility Components is an automotive component manufacturer focused on body-in-white assemblies, sheet metal stampings, welded sub-assemblies, chassis structures, and EV-related structural components for passenger vehicle OEMs and Tier-1 automotive customers.</textarea>
+      <textarea name="description" required>Adidas is a global sportswear and lifestyle brand known for athletic footwear, performance apparel, sports equipment, and fashion-led lifestyle products across running, football, training, originals, and athleisure categories.</textarea>
 
       <label>Tone *</label>
-      <input name="tone" required value="Professional, credible, practical, and technical">
+      <input name="tone" required value="Energetic, aspirational, performance-led, youthful, inclusive, and lifestyle-oriented">
 
       <label>Positioning Statement *</label>
-      <textarea name="positioning_statement" required>ABC Mobility Components is positioned as a reliable automotive manufacturing partner for structural components, BIW assemblies, and EV-ready systems.</textarea>
+      <textarea name="positioning_statement" required>Adidas is positioned as a global performance and lifestyle sportswear brand that blends innovation, athlete credibility, street culture, sustainability, and everyday comfort.</textarea>
 
       <label>Products *</label>
-      <textarea name="products" required>Body-in-white assemblies
-Sheet metal stampings
-Welded sub-assemblies
-Chassis structures
-EV structural components</textarea>
+      <textarea name="products" required>Performance running shoes
+Football boots and teamwear
+Training apparel
+Lifestyle sneakers
+Adidas Originals
+Athleisure wear
+Sports accessories
+Sustainable product lines</textarea>
 
       <label>Target Markets *</label>
-      <textarea name="target_markets" required>India
-United States
+      <textarea name="target_markets" required>Global
+North America
 Europe
+India
+China
 Japan
-ASEAN
-Middle East</textarea>
+Southeast Asia
+Middle East
+Latin America</textarea>
 
       <label>Known Personas *</label>
-      <textarea name="known_personas" required>OEM sourcing leader
-Automotive program manager
-EV platform engineering team
-Tier-1 procurement team</textarea>
+      <textarea name="known_personas" required>Athletes and sports professionals
+Fitness and training enthusiasts
+Sneaker and streetwear consumers
+Football fans and players
+Running community
+Gen Z lifestyle shoppers
+Sustainability-conscious consumers
+E-commerce shoppers</textarea>
 
       <label>Competitor List *</label>
-      <textarea name="competitor_list" required>JBM Group
-Autocomp Corporation
-Gestamp India
-Magna India
-Bharat Forge auto components division</textarea>
+      <textarea name="competitor_list" required>Nike
+Puma
+New Balance
+Under Armour
+ASICS
+Reebok
+Skechers
+Lululemon</textarea>
 
       <label>C360 Column Guide *</label>
-      <textarea name="c360_column_guide" required>customer_name: customer or account name
-segment: customer segment
+      <textarea name="c360_column_guide" required>customer_id: unique customer identifier
+customer_name: customer or account name
+segment: customer segment such as athlete, lifestyle shopper, sneaker buyer, or fitness enthusiast
 region: customer geography
-product_interest: product or service interest
-engagement_score: engagement score</textarea>
+preferred_sport: sport or activity preference
+product_interest: footwear, apparel, accessories, football, running, training, originals, or lifestyle
+purchase_channel: online store, retail store, marketplace, or app
+engagement_score: engagement score
+loyalty_status: loyalty or membership tier</textarea>
 
       <label>Aliases *</label>
-      <textarea name="aliases" required>ABC Mobility Components
-ABC Mobility
-ABC Components
-ABC Auto Components
-ABCMC</textarea>
+      <textarea name="aliases" required>Adidas
+adidas
+Adidas Originals
+Adidas Performance
+Three Stripes
+Adi
+adidas India
+adidas Global</textarea>
 
       <label>Regions *</label>
-      <textarea name="regions" required>India
+      <textarea name="regions" required>Global
+India
 IN
 United States
 US
@@ -369,10 +390,13 @@ U.S.
 USA
 Europe
 EU
+Germany
+China
 Japan
 ASEAN
 Middle East
-UAE</textarea>
+UAE
+Latin America</textarea>
 
       <button type="submit">Create brand_context.md and Run Pipeline</button>
     </form>
@@ -482,7 +506,7 @@ def result_html(user_id: str, run_id: str, output_ready: bool) -> str:
 def health():
     return {
         "status": "ok",
-        "service": "geo-web-output-only-safe",
+        "service": "geo-web-adidas-defaults",
         "project": GCP_PROJECT_ID,
         "region": REGION,
         "geo_bucket": GEO_BUCKET,
